@@ -1,0 +1,145 @@
+// #popclip
+// name: 中文标点规范化
+// icon: 标
+// after: paste-result
+// language: javascript
+// # 一键把中文文本里的英文/繁体标点规范成简体中文标点（单向 英→中）：
+// #   直引号 " ' -> 中文弯引号 “ ” ‘ ’ （仅中文语境，成对配对）
+// #   繁体角引号 「」『』 -> 简体引号 “ ” ‘ ’
+// #   半角标点 , ; : ? ! . ( ) -> ，；：？！。（） ，并把 ... -> ……
+// # 数字/网址/代码/时间/比例/路径/英文/颜文字等不受影响（1,000 / 3.14 / 12:30 / http:// / func(x) / 6" / :)）。
+// # Markdown 行内标记 ** _ ` ~ 视为“透明”，不会妨碍判断，也不会被改动。
+const arr = Array.from(popclip.input.text); // 按码点切分，兼容 emoji / 扩展 B 汉字
+const n = arr.length;
+
+function isCJK(ch) {
+  if (!ch) return false;
+  const c = ch.codePointAt(0);
+  return (
+    (c >= 0x4e00 && c <= 0x9fff) ||   // CJK 基本汉字
+    (c >= 0x3400 && c <= 0x4dbf) ||   // 扩展 A
+    (c >= 0x20000 && c <= 0x2fa1f) || // 扩展 B–F（> U+FFFF）
+    (c >= 0xf900 && c <= 0xfaff) ||   // 兼容汉字
+    (c >= 0x3000 && c <= 0x303f) ||   // 中文标点（。、「」『』《》等）
+    (c >= 0xff00 && c <= 0xffef) ||   // 全角/半角形式（含全角￥）
+    c === 0x2014 || c === 0x2026 || c === 0x00b7 // — … ·
+  );
+}
+
+// 探测上下文时“透明”的字符：引号、括号、本扩展会转换的句读标点、以及 Markdown 行内标记。
+// 数字/字母/空白不在其中，会中止扫描，从而保护 3.14 / 1,000 / U.S. / 12:30 / http://。
+const SKIP = new Set(['"', "'", '“', '”', '‘', '’',
+  ',', ';', ':', '?', '!', '.', '(', ')',
+  '*', '_', '`', '~']); // **粗体** _斜体_ `代码` ~删除~
+
+function leftCJK(i) {
+  let j = i - 1;
+  while (j >= 0 && SKIP.has(arr[j])) j--;
+  return j >= 0 && isCJK(arr[j]);
+}
+function rightCJK(i) {
+  let j = i + 1;
+  while (j < n && SKIP.has(arr[j])) j++;
+  return j < n && isCJK(arr[j]);
+}
+// 紧贴标识符后的左括号——func(x)、if(x>0)、[文字](网址)——是调用/取值/Markdown 链接，整对保持半角。
+const isCallOpen = (o) => {
+  const p = arr[o - 1];
+  return p != null && /[A-Za-z0-9_)\]]/.test(p);
+};
+const isDigit = (c) => c != null && c >= '0' && c <= '9';
+
+// 第一遍：括号成对判定（绝不拆开）。只转换成对、非调用型、且四边沿任一处贴汉字的括号。
+const parenFW = new Array(n).fill(false);
+const stack = [];
+for (let k = 0; k < n; k++) {
+  if (arr[k] === '(') stack.push(k);
+  else if (arr[k] === ')') {
+    if (stack.length) {
+      const o = stack.pop();
+      const dec = !isCallOpen(o) &&
+        (leftCJK(o) || rightCJK(o) || leftCJK(k) || rightCJK(k));
+      parenFW[o] = dec;
+      parenFW[k] = dec;
+    }
+    // 落单的右括号：保持原样（保护 :) 、[0,1) 等）
+  }
+}
+
+// 第二遍探测：与 leftCJK/rightCJK 同，但跳过的括号若“将被转成全角”，也算中文语境——
+// 于是「…（zweite Natur）,也就是」里括号后的逗号也能被识别为中文逗号。
+function leftCJK2(i) {
+  let j = i - 1;
+  while (j >= 0 && SKIP.has(arr[j])) {
+    if ((arr[j] === '(' || arr[j] === ')') && parenFW[j]) return true;
+    j--;
+  }
+  return j >= 0 && isCJK(arr[j]);
+}
+function rightCJK2(i) {
+  let j = i + 1;
+  while (j < n && SKIP.has(arr[j])) {
+    if ((arr[j] === '(' || arr[j] === ')') && parenFW[j]) return true;
+    j++;
+  }
+  return j < n && isCJK(arr[j]);
+}
+
+// 第二遍：逐字符输出
+let dq = 0, sq = 0; // 交替开/闭，仅对“被转换的中文语境引号”计数
+const out = [];
+for (let k = 0; k < n; k++) {
+  const ch = arr[k];
+  switch (ch) {
+    // 繁体角引号 -> 简体弯引号（角引号天然分开闭，直接映射）
+    case '「': out.push('“'); break;
+    case '」': out.push('”'); break;
+    case '『': out.push('‘'); break;
+    case '』': out.push('’'); break;
+
+    // 直引号 -> 中文弯引号：仅在中文语境、且左侧非数字（保护英尺/英寸 6" 5'）
+    case '"':
+      if ((leftCJK2(k) || rightCJK2(k)) && !isDigit(arr[k - 1])) {
+        dq++; out.push(dq % 2 ? '“' : '”');
+      } else out.push(ch);
+      break;
+    case "'":
+      if ((leftCJK2(k) || rightCJK2(k)) && !isDigit(arr[k - 1])) {
+        sq++; out.push(sq % 2 ? '‘' : '’');
+      } else out.push(ch); // 英文撇号 don't / it's 等保持
+      break;
+
+    // 半角标点 -> 全角
+    case ',': out.push(leftCJK2(k) ? '，' : ch); break; // ，
+    case ';': out.push(leftCJK2(k) ? '；' : ch); break; // ；
+    case '?': out.push(leftCJK2(k) ? '？' : ch); break; // ？
+    case '!': out.push(leftCJK2(k) ? '！' : ch); break; // ！
+    case ':': {
+      // 冒号后跟空格 = 西式“标签: 值”（端口: 8080），保持半角；中文行文（论证了:商品）转全角。
+      const next = arr[k + 1];
+      const block = next === ' ' || next === '\t' ||
+        next === ')' || next === '(' || next === '-'; // 兼顾颜文字 :) :( :-
+      out.push(leftCJK2(k) && !block ? '：' : ch); break; // ：
+    }
+    case '.': {
+      let run = 1;
+      while (arr[k + run] === '.') run++;
+      if (run >= 3) { // 省略号 ... -> ……（仅贴着汉字时）
+        if (leftCJK2(k) || rightCJK2(k + run - 1)) out.push('……');
+        else for (let t = 0; t < run; t++) out.push('.');
+        k += run - 1;
+      } else if (run === 2) {
+        out.push('.', '.'); k += 1; // .. 多为范围/代码，保持
+      } else {
+        const next = arr[k + 1];
+        const blockedByAlnum = next != null && /[A-Za-z0-9/@]/.test(next); // .com ./ a.b 等保持
+        out.push(leftCJK2(k) && !blockedByAlnum ? '。' : ch); // 。
+      }
+      break;
+    }
+    case '(': out.push(parenFW[k] ? '（' : ch); break; // （
+    case ')': out.push(parenFW[k] ? '）' : ch); break; // ）
+    default:  out.push(ch);
+  }
+}
+return out.join('');
