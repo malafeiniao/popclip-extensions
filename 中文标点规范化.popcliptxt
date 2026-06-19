@@ -53,12 +53,15 @@ const isDigit = (c) => c != null && c >= '0' && c <= '9';
 const parenFW = new Array(n).fill(false);
 const stack = [];
 for (let k = 0; k < n; k++) {
-  if (arr[k] === '(') stack.push(k);
-  else if (arr[k] === ')') {
+  const c = arr[k];
+  if (c === '(' || c === '（') stack.push(k);        // 全角 （ 也算开括号
+  else if (c === ')' || c === '）') {                // 全角 ） 也算闭括号
     if (stack.length) {
       const o = stack.pop();
-      const dec = !isCallOpen(o) &&
-        (leftCJK(o) || rightCJK(o) || leftCJK(k) || rightCJK(k));
+      // 任一端已是全角 => 这对显然属于中文，整对规范成全角（修复 （…) 或 (…） 这种半全混用）
+      const eitherFull = arr[o] === '（' || c === '）';
+      const dec = eitherFull ||
+        (!isCallOpen(o) && (leftCJK(o) || rightCJK(o) || leftCJK(k) || rightCJK(k)));
       parenFW[o] = dec;
       parenFW[k] = dec;
     }
