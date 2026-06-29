@@ -4,7 +4,7 @@
 // after: paste-result
 // language: javascript
 // # 一键把中文文本里的英文/繁体标点规范成简体中文标点（单向 英→中）：
-// #   直引号 " ' -> 中文弯引号 “ ” ‘ ’ （仅中文语境，成对配对）
+// #   直引号 " ' -> 中文弯引号 “ ” ‘ ’ （仅中文语境，整对配对判定）
 // #   繁体角引号 「」『』 -> 简体引号 “ ” ‘ ’
 // #   半角标点 , ; : ? ! . ( ) -> ，；：？！。（） ，并把 ... -> ……
 // # 数字/网址/代码/时间/比例/路径/英文/颜文字等不受影响（1,000 / 3.14 / 12:30 / http:// / func(x) / 6" / :)）。
@@ -48,6 +48,7 @@ const isCallOpen = (o) => {
   return p != null && /[A-Za-z0-9_)\]]/.test(p);
 };
 const isDigit = (c) => c != null && c >= '0' && c <= '9';
+const isWestLetter = (c) => c != null && /[A-Za-zÀ-ɏ]/.test(c); // 拉丁字母（含重音），用于识别撇号
 
 // 第一遍：括号成对判定（绝不拆开）。只转换成对、非调用型、且四边沿任一处贴汉字的括号。
 const parenFW = new Array(n).fill(false);
@@ -69,15 +70,12 @@ for (let k = 0; k < n; k++) {
   }
 }
 
-// 第二遍探测：与 leftCJK/rightCJK 同，但把括号当作“边界”，且只在我们处于括号【外侧】、
-// 而那对括号又将被转成全角时，才算中文语境——于是「…（zweite Natur）,也就是」里括号后的
-// 逗号能识别为中文逗号；而「(…"citizens")」里贴着闭括号、其实在括号【内】的英文引号不会被
-// 误判：向外扫到对面的括号即停，不会越过括号去看另一侧的汉字。
+// 句读标点用的探测：与 leftCJK/rightCJK 同，但跳过的括号若“将被转成全角”，也算中文语境——
+// 于是「…（zweite Natur）,也就是」里括号后的逗号也能被识别为中文逗号。（仅用于句读，不用于引号）
 function leftCJK2(i) {
   let j = i - 1;
   while (j >= 0 && SKIP.has(arr[j])) {
-    if (arr[j] === '(') return false;               // 向左遇开括号：我们在括号内，不越界看外面
-    if (arr[j] === ')' && parenFW[j]) return true;  // 向左遇“将转全角”的闭括号：在其外侧，属中文
+    if ((arr[j] === '(' || arr[j] === ')') && parenFW[j]) return true;
     j--;
   }
   return j >= 0 && isCJK(arr[j]);
@@ -85,15 +83,111 @@ function leftCJK2(i) {
 function rightCJK2(i) {
   let j = i + 1;
   while (j < n && SKIP.has(arr[j])) {
-    if (arr[j] === ')') return false;               // 向右遇闭括号：我们在括号内，不越界看外面
-    if (arr[j] === '(' && parenFW[j]) return true;  // 向右遇“将转全角”的开括号：在其外侧，属中文
+    if ((arr[j] === '(' || arr[j] === ')') && parenFW[j]) return true;
     j++;
   }
   return j < n && isCJK(arr[j]);
 }
 
+// 引号成对判定（关键）：直引号天然成对，必须【整对】决定是否转成弯引号、再按位置定开/闭。
+// 若像旧版那样逐个判断，一旦只转了半边（例如一只引号贴着将转全角的括号、另一只贴着拉丁字母），
+// 就会留下“孤引号”，还会打乱全局开/闭奇偶，令其后所有中文引号方向整体翻转。
+// 括号在这里是【硬边界】：判断一只引号是否处于中文语境时，向外扫到任何括号（半角/全角/方/花）
+// 即停，不越界去看括号另一侧的汉字——于是 (Rodríguez,"citizens' media") 这类纯西文括注里的
+// 引号保持直引号；而 (所谓"second nature") 这种中文引入词后的引号，整对转成弯引号。
+const isBracket = (c) => c === '(' || c === ')' || c === '（' || c === '）' ||
+  c === '[' || c === ']' || c === '{' || c === '}';
+// 引号探测时“透明”的字符（= SKIP 去掉括号）：扫描时跳过，遇括号则停。
+const QSKIP = new Set(['"', "'", '“', '”', '‘', '’',
+  ',', ';', ':', '?', '!', '.', '*', '_', '`', '~']);
+function qLeftCJK(i) {   // i 左侧（同一括号层内）紧邻是否汉字
+  let j = i - 1;
+  while (j >= 0) {
+    const c = arr[j];
+    if (isBracket(c)) return false;   // 越界即止
+    if (!QSKIP.has(c)) break;
+    j--;
+  }
+  return j >= 0 && isCJK(arr[j]);
+}
+function qRightCJK(i) {  // i 右侧（同一括号层内）紧邻是否汉字
+  let j = i + 1;
+  while (j < n) {
+    const c = arr[j];
+    if (isBracket(c)) return false;
+    if (!QSKIP.has(c)) break;
+    j++;
+  }
+  return j < n && isCJK(arr[j]);
+}
+function contentHasCJK(o, c) {  // 一对引号之间、且与引号【同一括号层】是否含汉字（嵌套括号内的汉字不算）
+  let depth = 0;
+  for (let t = o + 1; t < c; t++) {
+    const ch = arr[t];
+    if (ch === '(' || ch === '（' || ch === '[' || ch === '{') { depth++; continue; }
+    if (ch === ')' || ch === '）' || ch === ']' || ch === '}') { if (depth > 0) depth--; continue; }
+    if (depth === 0 && isCJK(arr[t])) return true;
+  }
+  return false;
+}
+
+const quoteOut = new Map(); // 引号下标 -> 目标弯引号；不在表中者保持原样
+// 一对引号（下标 o<c）只要任一端紧贴汉字、或引号内（同层）含汉字，就判为中文语境，整对转弯引号
+function maybeConvert(o, c, openCh, closeCh) {
+  if (qLeftCJK(o) || qRightCJK(c) || contentHasCJK(o, c)) {
+    quoteOut.set(o, openCh);
+    quoteOut.set(c, closeCh);
+  }
+}
+
+// 跳过空白后，下一个非空白是否拉丁字母（用于识别词组中间的所有格：workers' rights）
+const followedByLatinWord = (k) => {
+  let j = k + 1;
+  while (arr[j] === ' ' || arr[j] === '\t') j++;
+  return isWestLetter(arr[j]);
+};
+
+// 双引号：唯一的非引号用法是英寸记号 6"（数字后、且当时不在引号内）。用“栈式交替”配对：
+//   · 栈非空 => 这只是闭引号，与栈顶开引号成对（即便前面是数字，如 "附录3" / "1990"）
+//   · 栈空且前接数字 => 英寸记号 6"，跳过
+//   · 栈空且前非数字 => 开引号，入栈
+// 开/闭只由“是否已在引号内”决定，不靠相邻字符类别，故不受括号/符号/数字/紧贴字母的干扰。
+{
+  const st = [];
+  for (let k = 0; k < n; k++) {
+    if (arr[k] !== '"') continue;
+    if (st.length) maybeConvert(st.pop(), k, '“', '”');
+    else if (!isDigit(arr[k - 1])) st.push(k);
+  }
+}
+
+// 单引号：' 还兼作撇号/所有格/缩写，须先甄别再用“栈式交替”配对，使落单的撇号不移动配对奇偶：
+//   · 前接数字            => 英尺 5'，不是引号
+//   · 前后都是拉丁字母      => 词中撇号 don't / it's / O'Brien
+//   · 前是拉丁字母、后是空格+字母 => 词组中间的所有格 Teachers' Guide / workers' rights，跳过
+//   · 前是拉丁字母（其余）  => 闭引号或所有格：栈里有开引号则成对，否则是落单所有格 workers'，跳过
+//   · 前非汉字且后接字母/数字 => 词首缩写 'em / 年代 '90s / 西文词首撇号，跳过
+//   · 其余（多为汉字两侧）   => 按交替：栈空作开引号入栈，栈非空作闭引号出栈成对
+{
+  const st = [];
+  for (let k = 0; k < n; k++) {
+    if (arr[k] !== "'") continue;
+    const prev = arr[k - 1], next = arr[k + 1];
+    // 前接数字：栈内已有开引号 => 这是数字结尾的闭引号（'方案2' / '附录3' / '图3'），成对；
+    //           栈空 => 英尺 5'，跳过。（与双引号同理，避免数字结尾标签漏配、连累后续引号）
+    if (isDigit(prev)) { if (st.length) maybeConvert(st.pop(), k, '‘', '’'); continue; }
+    if (isWestLetter(prev) && isWestLetter(next)) continue;
+    if (isWestLetter(prev)) {
+      if (followedByLatinWord(k)) continue;                 // 词组中间的所有格，不当作闭引号
+      if (st.length) maybeConvert(st.pop(), k, '‘', '’');   // 闭引号
+      continue;                                              // 栈空 => 落单所有格，跳过
+    }
+    if (!isCJK(prev) && (isWestLetter(next) || isDigit(next))) continue;
+    if (st.length) maybeConvert(st.pop(), k, '‘', '’'); else st.push(k);
+  }
+}
+
 // 第二遍：逐字符输出
-let dq = 0, sq = 0; // 交替开/闭，仅对“被转换的中文语境引号”计数
 const out = [];
 for (let k = 0; k < n; k++) {
   const ch = arr[k];
@@ -104,16 +198,10 @@ for (let k = 0; k < n; k++) {
     case '『': out.push('‘'); break;
     case '』': out.push('’'); break;
 
-    // 直引号 -> 中文弯引号：仅在中文语境、且左侧非数字（保护英尺/英寸 6" 5'）
+    // 直引号 -> 中文弯引号：用上面“成对预判”的结果（开/闭/保持），不再逐个判断、不用全局计数
     case '"':
-      if ((leftCJK2(k) || rightCJK2(k)) && !isDigit(arr[k - 1])) {
-        dq++; out.push(dq % 2 ? '“' : '”');
-      } else out.push(ch);
-      break;
     case "'":
-      if ((leftCJK2(k) || rightCJK2(k)) && !isDigit(arr[k - 1])) {
-        sq++; out.push(sq % 2 ? '‘' : '’');
-      } else out.push(ch); // 英文撇号 don't / it's 等保持
+      out.push(quoteOut.has(k) ? quoteOut.get(k) : ch);
       break;
 
     // 半角标点 -> 全角
