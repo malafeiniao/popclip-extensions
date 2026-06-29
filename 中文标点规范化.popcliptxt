@@ -69,12 +69,15 @@ for (let k = 0; k < n; k++) {
   }
 }
 
-// 第二遍探测：与 leftCJK/rightCJK 同，但跳过的括号若“将被转成全角”，也算中文语境——
-// 于是「…（zweite Natur）,也就是」里括号后的逗号也能被识别为中文逗号。
+// 第二遍探测：与 leftCJK/rightCJK 同，但把括号当作“边界”，且只在我们处于括号【外侧】、
+// 而那对括号又将被转成全角时，才算中文语境——于是「…（zweite Natur）,也就是」里括号后的
+// 逗号能识别为中文逗号；而「(…"citizens")」里贴着闭括号、其实在括号【内】的英文引号不会被
+// 误判：向外扫到对面的括号即停，不会越过括号去看另一侧的汉字。
 function leftCJK2(i) {
   let j = i - 1;
   while (j >= 0 && SKIP.has(arr[j])) {
-    if ((arr[j] === '(' || arr[j] === ')') && parenFW[j]) return true;
+    if (arr[j] === '(') return false;               // 向左遇开括号：我们在括号内，不越界看外面
+    if (arr[j] === ')' && parenFW[j]) return true;  // 向左遇“将转全角”的闭括号：在其外侧，属中文
     j--;
   }
   return j >= 0 && isCJK(arr[j]);
@@ -82,7 +85,8 @@ function leftCJK2(i) {
 function rightCJK2(i) {
   let j = i + 1;
   while (j < n && SKIP.has(arr[j])) {
-    if ((arr[j] === '(' || arr[j] === ')') && parenFW[j]) return true;
+    if (arr[j] === ')') return false;               // 向右遇闭括号：我们在括号内，不越界看外面
+    if (arr[j] === '(' && parenFW[j]) return true;  // 向右遇“将转全角”的开括号：在其外侧，属中文
     j++;
   }
   return j < n && isCJK(arr[j]);
