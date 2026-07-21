@@ -1,0 +1,60 @@
+// #popclip
+// name: MotrixNext 下载
+// icon: ⏬
+// app:
+//   name: MotrixNext
+//   link: https://github.com/AnInsomniacy/motrix-next
+//   check installed: true
+//   bundle identifiers: [com.motrix.next]
+// language: javascript
+// regex: (?i)(https?|ftp|thunder|ed2k)://\S+|magnet:\?\S+|\bwww\.\S+
+// # 选中含链接的文本，把其中的下载链接发给 MotrixNext（弹出「新建任务」面板供确认，不会静默开始下载）。
+// # 支持 http(s) / ftp / magnet / ed2k / thunder，以及 www. 开头的裸域名（自动补 https://）；可一次选中多条。
+// # 链接末尾黏着的中英文标点、Markdown 标记会被剔除；ed2k 链接里的未编码中文文件名保留。
+
+// URL 主体 = 可见 ASCII 白名单（去掉空白与 < > " ' ` 五个包裹字符）：
+//   [!#-&(-;=?-_a-~] 即 0x21-0x7E 挖掉 0x22" 0x27' 0x3C< 0x3E> 0x60`
+// 规范 URL 中非 ASCII 应为 % 编码，所以链接在中文句子里能干净截断；
+// ed2k 例外：文件名常含未编码中文，只在空白、引号与中文标点处截断。
+const BODY = '[!#-&(-;=?-_a-~]+';
+const ED2K_BODY = '[^\\s<>"\'`（）《》【】〈〉「」『』“”‘’，。、；：！？…—]+';
+const NOT_SCHEME = '(?<![A-Za-z0-9+.-])'; // 避免把 xhttps:// 之类误认成 https://
+const RE = new RegExp(
+  NOT_SCHEME + '(?:https?|ftp|thunder)://' + BODY +
+  '|' + NOT_SCHEME + 'magnet:\\?' + BODY +
+  '|' + NOT_SCHEME + 'ed2k://' + ED2K_BODY +
+  '|(?<![-\\w.])www\\.' + BODY,
+  'gi'
+);
+
+// 剔除黏在链接末尾的句读标点与 Markdown 标记；右括号只在多于左括号时剥掉，
+// 保护 Wikipedia 式 …/Foo_(bar) 路径；单个 ~ 可能是路径（/~user），成对才视为删除线。
+function cleanTail(u) {
+  let prev;
+  do {
+    prev = u;
+    u = u.replace(/[.,;:!?]+$/, '');
+    u = u.replace(/[*_]+$/, '');
+    u = u.replace(/~~+$/, '');
+    while (u.endsWith(')') && (u.match(/\(/g) || []).length < (u.match(/\)/g) || []).length) u = u.slice(0, -1);
+    while (u.endsWith(']') && (u.match(/\[/g) || []).length < (u.match(/\]/g) || []).length) u = u.slice(0, -1);
+  } while (u !== prev);
+  return u;
+}
+
+const seen = new Set();
+const urls = [];
+for (const m of popclip.input.text.match(RE) || []) {
+  let u = cleanTail(m);
+  if (/^www\./i.test(u)) u = 'https://' + u;
+  if (u && !seen.has(u)) { seen.add(u); urls.push(u); }
+}
+
+if (urls.length === 0) {
+  popclip.showFailure();
+} else {
+  // 逐条交给 MotrixNext；用 Bundle ID 点名，装了多个下载器也不会跑错应用
+  for (const u of urls) {
+    popclip.openUrl(u, { app: 'com.motrix.next' });
+  }
+}

@@ -1,0 +1,593 @@
+// #popclip
+// name: 中文排版
+// icon: 排
+// language: javascript
+// module: true
+// # 中文排版工具合集：一个扩展、两个按钮，可在 PopClip 扩展设置里分别开关（默认都显示）。
+// #   「隔」间隔标准化 —— 一站式，按序执行：
+// #     0. 保护区：``` 围栏代码块、`行内代码`、https?:// 与 www. 开头的网址整体跳过
+// #     1. 全角字母数字折回半角：ＡＢＣ１２３ -> ABC123（全角标点不在此列，按语境另行处理）
+// #     2. 去掉不合理的空格：汉字之间、全角标点两侧的空格删除，连续空白收拢为一个半角空格
+// #     3. 标点中文化（见下），与第 2 步交替迭代至不动点，一次点击即得终态
+// #     4. 盘古之白：汉字与英文/数字交界处补一个半角空格（第 3 章 / 用 Python 写 / 增长 50%）
+// #   「标」中文标点规范化 —— 只做第 0 步保护区 + 第 3 步标点中文化：
+// #     完全不碰空格，不折全角字母数字，不加盘古之白，适合不想让工具动空格的场合。
+// # 两个按钮共享同一套标点引擎（单向 英->中，仅中文语境才动手）：
+// #   直引号 " ' -> “ ” ‘ ’（整对配对判定；已在 “ ” 或 「 」 内的降级为 ‘ ’，双内用单）
+// #   繁体角引号 「」『』 与半角 ｢｣ -> 简体弯引号；半角 CJK 标点 ｡ ､ ･ -> 。 、 ·
+// #   半角标点 , ; : ? ! . ( ) -> 全角；... -> ……；恰两个连字符 -- -> ——
+// #   调用型括号 func(…) 与花括号 {…} 内部视为代码，一律不转换
+// # 数字/网址/代码/JSON/HTML 属性/时间/路径/表格/纯英文行文不受影响；
+// # 行首缩进、行尾空格、制表符、不换行空格（nbsp）原样保留；重复运行不再变化（幂等）。
+
+// ---------- 字符分类 ----------
+const isDigit = (c) => c != null && c >= '0' && c <= '9';
+const isWestLetter = (c) => c != null && /[A-Za-zÀ-ɏ]/.test(c); // 拉丁字母（含重音）
+const isAlnum = (c) => c != null && /[0-9A-Za-zÀ-ɏ]/.test(c);
+const MARKERS = new Set(['*', '_', '`', '~']); // Markdown 行内标记，探测语境时“透明”
+const SP = new Set([' ', '\t', '　', ' ']); // 行内空白（含全角空格、nbsp）
+const isSp = (c) => c != null && SP.has(c);
+const isNL = (c) => c === '\n' || c === '\r';
+
+function isHan(ch) { // 仅汉字（盘古之白只认它）；〇 U+3007 是汉字数字，也算
+  if (!ch) return false;
+  const c = ch.codePointAt(0);
+  return (
+    (c >= 0x4e00 && c <= 0x9fff) ||   // CJK 基本汉字
+    (c >= 0x3400 && c <= 0x4dbf) ||   // 扩展 A
+    (c >= 0x20000 && c <= 0x2fa1f) || // 扩展 B–F（> U+FFFF）
+    (c >= 0xf900 && c <= 0xfaff) ||   // 兼容汉字
+    c === 0x3007                      // 〇
+  );
+}
+function isCNPunct(ch) { // 无歧义的中文/全角标点（、。《》【】，（）：；？！｡｢ 等）
+  if (!ch) return false;
+  const c = ch.codePointAt(0);
+  return (
+    (c >= 0x3001 && c <= 0x303f && c !== 0x3007) || // CJK 标点（不含全角空格与汉字〇）
+    (c >= 0xff01 && c <= 0xff0f) || (c >= 0xff1a && c <= 0xff1f) ||
+    (c >= 0xff3b && c <= 0xff40) || (c >= 0xff5b && c <= 0xff65)
+  );
+}
+// 中英排印通用的符号，删空格时须看语境才敢动手，以免误伤英文用法：
+// 引号类按方向判断；— … · 这类非成对符号按“远端另一侧”对称判断。
+const QUOTE = new Set(['“', '”', '‘', '’']);
+const SYM = new Set(['—', '…', '·']);
+function isCJK(ch) { // 标点转换的语境判定用；— … · 不算（英文也用），在 SKIP 里作透明处理
+  if (!ch) return false;
+  const c = ch.codePointAt(0);
+  return isHan(ch) ||
+    (c >= 0x3000 && c <= 0x303f) || (c >= 0xff00 && c <= 0xffef);
+}
+
+// ---------- 第 0 步：保护区（围栏代码块 / 行内代码 / 网址） ----------
+function computeProtected(s) {
+  const ranges = [];
+  // 围栏代码块：``` 或 ~~~ 行起，至配对围栏行（或文末）
+  {
+    const lines = s.split('\n');
+    let pos = 0, blockStart = -1, openCh = '', openLen = 0;
+    for (const line of lines) {
+      const m = line.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
+      if (m) {
+        if (blockStart < 0) { blockStart = pos; openCh = m[1][0]; openLen = m[1].length; }
+        else if (m[1][0] === openCh && m[1].length >= openLen) {
+          ranges.push([blockStart, pos + line.length]);
+          blockStart = -1;
+        }
+      }
+      pos += line.length + 1;
+    }
+    if (blockStart >= 0) ranges.push([blockStart, s.length]); // 未闭合围栏保护到文末
+  }
+  const covered = (i) => ranges.some(([a, b]) => i >= a && i < b);
+  // 行内代码：等长反引号串配对（CommonMark code span）
+  {
+    const re = /`+/g;
+    const ticks = [];
+    let m;
+    while ((m = re.exec(s))) if (!covered(m.index)) ticks.push([m.index, m[0].length]);
+    let i = 0;
+    while (i < ticks.length) {
+      let j = -1;
+      for (let t = i + 1; t < ticks.length; t++) if (ticks[t][1] === ticks[i][1]) { j = t; break; }
+      if (j < 0) { i++; continue; }
+      ranges.push([ticks[i][0], ticks[j][0] + ticks[j][1]]);
+      ticks.splice(i, j - i + 1);
+    }
+  }
+  // 网址：协议/www. 起的连续非空白整体保护（边界本就有歧义，宁可多保不误改）
+  {
+    const re = /(?:https?:\/\/|www\.)\S+/g;
+    let m;
+    while ((m = re.exec(s))) if (!covered(m.index)) ranges.push([m.index, m.index + m[0].length]);
+  }
+  ranges.sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  for (const r of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && r[0] <= last[1]) last[1] = Math.max(last[1], r[1]);
+    else merged.push([r[0], r[1]]);
+  }
+  return merged;
+}
+
+// ---------- 第 1 步：全角字母数字 -> 半角 ----------
+function foldWidth(s) {
+  return s.replace(/[０-９Ａ-Ｚａ-ｚ]/g,
+    (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0));
+}
+
+// ---------- 第 2 步：空格清理（与标点转换交替迭代） ----------
+// 只处理“行内、两端都是实义字符”的空白串：行首缩进（含全角空格缩进）、行尾空格
+// （Markdown 硬换行）原样保留；含制表符的串视为表格结构，整段保留；
+// 表格竖线 | 两侧的空格保留；未触发任何规则的单个空白字符（如 nbsp）原样保留。
+function cleanSpaces(s) {
+  const arr = Array.from(s), n = arr.length, out = [];
+  // 越过 Markdown 行内标记，找左/右第一个非标记字符的下标
+  const solidL = (i) => { let j = i; while (j >= 0 && MARKERS.has(arr[j])) j--; return j; };
+  const solidR = (i) => { let j = i; while (j < n && MARKERS.has(arr[j])) j++; return j; };
+  const HALF_PUNCT = new Set([',', ';', ':', '?', '!', '.']);
+  // — … · 的远端探测：越过同类符号与空白，看符号“另一侧”贴的是什么
+  const farR = (i) => { let j = i; while (j < n && (SYM.has(arr[j]) || isSp(arr[j]))) j++; return j < n && !isNL(arr[j]) ? arr[j] : null; };
+  const farL = (i) => { let j = i; while (j >= 0 && (SYM.has(arr[j]) || isSp(arr[j]))) j--; return j >= 0 && !isNL(arr[j]) ? arr[j] : null; };
+  const strong = (c) => isHan(c) || isCNPunct(c);
+  let i = 0;
+  while (i < n) {
+    if (!isSp(arr[i])) { out.push(arr[i]); i++; continue; }
+    let j = i;
+    let hasTab = false;
+    while (j < n && isSp(arr[j])) { if (arr[j] === '\t') hasTab = true; j++; }
+    const L = arr[i - 1], R = arr[j];
+    if (hasTab || L == null || isNL(L) || R == null || isNL(R)) {
+      for (let t = i; t < j; t++) out.push(arr[t]); // 行首/行尾/制表符：原样保留
+      i = j; continue;
+    }
+    // 行首列表/引用标记（- * + > 1. 2)）之后的空白是缩进对齐，原样保留
+    let ls = i - 1;
+    while (ls >= 0 && !isNL(arr[ls])) ls--;
+    const prefix = arr.slice(ls + 1, i).join('');
+    if (/^(?:[-*+>]|\d{1,3}[.)])$/.test(prefix)) {
+      for (let t = i; t < j; t++) out.push(arr[t]);
+      i = j; continue;
+    }
+    const li = solidL(i - 1), ri = solidR(j);
+    const Lp = li >= 0 ? arr[li] : null, Rp = ri < n ? arr[ri] : null;
+    const strongL = strong(Lp), strongR = strong(Rp);
+    let drop = false;
+    if (Lp === '|' || Rp === '|') drop = false;               // Markdown 表格分隔，保留
+    else if (isCNPunct(Lp) || isCNPunct(Rp)) drop = true;     // 全角标点两侧不留空格
+    else if (strongL && strongR) drop = true;                 // 汉字之间的空格（PDF 换行残留等）
+    else if (strongL && QUOTE.has(Rp)) drop = true;           // 他说 “ -> 他说“
+    else if (QUOTE.has(Lp) && strongR) {
+      // ’ 紧跟拉丁字母 = 英文所有格/缩写的收尾（workers’ 权利），空格保留
+      drop = !(Lp === '’' && isWestLetter(arr[li - 1]));
+    } else if (strongL && SYM.has(Rp)) {
+      const f = farR(ri);                                     // 中文 —— 中文 两侧对称删；
+      drop = f == null || strong(f);                          // 松本 · Yui 远端是西文则整体保留
+    } else if (SYM.has(Lp) && strongR) {
+      const f = farL(li);
+      drop = f != null && strong(f);                          // Vue — 渐进式 保留原状
+    } else if (strongL && HALF_PUNCT.has(Rp)) {
+      // 汉字 后贴着 , . ; : ? !，且标点串之后回到中文/空白/行尾 => 空格是误加的（你好 ,世界）
+      // 若后面是西文（哈哈 :) / 中文 .NET）则不动
+      let k = ri;
+      while (k < n && HALF_PUNCT.has(arr[k])) k++;
+      const a = arr[k];
+      drop = a == null || isNL(a) || isSp(a) || isHan(a) || isCNPunct(a) ||
+             QUOTE.has(a) || SYM.has(a);
+    }
+    if (!drop) {
+      // 未触发任何中文语境规则的单个空白（如英文里的 nbsp）原样保留；
+      // 其余情况收拢/归一为一个半角空格
+      if (j - i === 1 && !strongL && !strongR) out.push(arr[i]);
+      else out.push(' ');
+    }
+    i = j;
+  }
+  return out.join('');
+}
+
+// {…} 成对内部的掩码（含花括号本身）：JSON/代码语境，标点转换与盘古之白都跳过
+function braceMask(arr) {
+  const mask = new Array(arr.length).fill(false);
+  const st = [];
+  for (let k = 0; k < arr.length; k++) {
+    if (arr[k] === '{') st.push(k);
+    else if (arr[k] === '}' && st.length) {
+      const o = st.pop();
+      for (let t = o; t <= k; t++) mask[t] = true;
+    }
+  }
+  return mask;
+}
+
+// ---------- 第 3 步：标点中文化（两个按钮共用的引擎） ----------
+function convertPunct(s) {
+  const arr = Array.from(s); // 按码点切分，兼容 emoji / 扩展 B 汉字
+  const n = arr.length;
+
+  // 探测上下文时“透明”的字符：引号、括号、会转换的句读标点、Markdown 行内标记，
+  // 以及中英通用的 … — ·（它们不算中文语境，但也不挡视线——修复 So…? 被误转）。
+  // 数字/字母/空白不在其中，会中止扫描，从而保护 3.14 / 1,000 / U.S. / 12:30。
+  const SKIP = new Set(['"', "'", '“', '”', '‘', '’',
+    ',', ';', ':', '?', '!', '.', '(', ')',
+    '*', '_', '`', '~', '…', '—', '·']);
+
+  // 沿 dir（-1 左 / +1 右）越过 SKIP 后，紧邻字符是否中文
+  function nearCJK(i, dir) {
+    let j = i + dir;
+    while (j >= 0 && j < n && SKIP.has(arr[j])) j += dir;
+    return j >= 0 && j < n && isCJK(arr[j]);
+  }
+  const leftCJK = (i) => nearCJK(i, -1), rightCJK = (i) => nearCJK(i, 1);
+  function contentHasHan(o, c) {
+    for (let t = o + 1; t < c; t++) if (isHan(arr[t])) return true;
+    return false;
+  }
+
+  // 代码语境掩码：调用型括号 func(…) / [x](…) 的内部、花括号 {…} 的内部（JSON/代码），
+  // 其中的引号与句读一律不转换，兑现“代码不受影响”的承诺。
+  const parenFW = new Array(n).fill(false);
+  const codeCtx = braceMask(arr); // 花括号内部先行入掩码，调用型括号在下面配对时补充
+  const markCode = (a, b) => { for (let t = a; t <= b; t++) codeCtx[t] = true; };
+
+  // 颜文字闭括号甄别：:) ;) =) :-) ;-) =-) 不参与括号配对
+  const EYES = new Set([':', ';', '=']);
+  const isEmoticonClose = (k) =>
+    EYES.has(arr[k - 1]) || (arr[k - 1] === '-' && EYES.has(arr[k - 2]));
+
+  // 调用/取值型左括号：func(x)、if(x>0)、[文字](网址)——整对保持半角且内部视为代码。
+  // 前一字符是“已判全角的 ）”不算调用链（修复 (一)(二) 编号序列）；
+  // 前一字符是数字且括号里含汉字，是「25(虚岁)」式中文括注，也不算调用（f2(x) 仍是调用）。
+  function callish(o, k) {
+    const p = arr[o - 1];
+    if (p == null) return false;
+    if (p === ')') return !parenFW[o - 1];
+    if (p === ']') return true;
+    if (/[A-Za-z_]/.test(p)) return true;
+    if (isDigit(p)) return !contentHasHan(o, k);
+    return false;
+  }
+
+  // 括号成对判定（绝不拆开）。只转换成对、非调用型、且四边沿任一处贴汉字的括号。
+  {
+    const stack = [];
+    for (let k = 0; k < n; k++) {
+      const c = arr[k];
+      if (c === '(' || c === '（') stack.push(k);
+      else if (c === ')' || c === '）') {
+        if (c === ')' && isEmoticonClose(k)) continue; // 颜文字，不吃掉别人的开括号
+        if (!stack.length) continue; // 落单右括号保持原样（保护 [0,1) 等）
+        const o = stack.pop();
+        // 任一端已是全角 => 这对显然属于中文，整对规范成全角（修复 （…) 或 (…） 混用）
+        if (arr[o] === '（' || c === '）') { parenFW[o] = parenFW[k] = true; continue; }
+        if (callish(o, k)) { markCode(o, k); continue; }
+        const dec = leftCJK(o) || rightCJK(o) || leftCJK(k) || rightCJK(k);
+        parenFW[o] = dec;
+        parenFW[k] = dec;
+      }
+    }
+  }
+  // 句读标点用的探测：同 nearCJK，但跳过的括号若“将被转成全角”，也算中文语境。
+  function nearCJK2(i, dir) {
+    let j = i + dir;
+    while (j >= 0 && j < n && SKIP.has(arr[j])) {
+      if ((arr[j] === '(' || arr[j] === ')') && parenFW[j]) return true;
+      j += dir;
+    }
+    return j >= 0 && j < n && isCJK(arr[j]);
+  }
+  const leftCJK2 = (i) => nearCJK2(i, -1), rightCJK2 = (i) => nearCJK2(i, 1);
+
+  // 引号成对判定：直引号必须【整对】决定是否转弯引号，否则会留下孤引号并翻转后续方向。
+  // 括号是【硬边界】：向外扫到任何括号即停，不越界看括号另一侧的汉字。
+  const isBracket = (c) => c === '(' || c === ')' || c === '（' || c === '）' ||
+    c === '[' || c === ']' || c === '{' || c === '}';
+  const QSKIP = new Set(['"', "'", '“', '”', '‘', '’',
+    ',', ';', ':', '?', '!', '.', '*', '_', '`', '~', '…', '—', '·']);
+  function qNearCJK(i, dir) {
+    let j = i + dir;
+    while (j >= 0 && j < n) {
+      const c = arr[j];
+      if (isBracket(c)) return false;
+      if (!QSKIP.has(c)) break;
+      j += dir;
+    }
+    return j >= 0 && j < n && isCJK(arr[j]);
+  }
+  const qLeftCJK = (i) => qNearCJK(i, -1), qRightCJK = (i) => qNearCJK(i, 1);
+  function contentHasCJK(o, c) { // 引号之间、与引号同一括号层是否含汉字
+    let depth = 0;
+    for (let t = o + 1; t < c; t++) {
+      const ch = arr[t];
+      if (ch === '(' || ch === '（' || ch === '[' || ch === '{') { depth++; continue; }
+      if (ch === ')' || ch === '）' || ch === ']' || ch === '}') { if (depth > 0) depth--; continue; }
+      if (depth === 0 && isCJK(arr[t])) return true;
+    }
+    return false;
+  }
+
+  // 引号嵌套层深：已在 “ ” 或 「 」 内的直双引号，转换时降级为 ‘ ’（双内用单）
+  const qDepth = new Array(n).fill(0);
+  {
+    let d = 0;
+    for (let k = 0; k < n; k++) {
+      qDepth[k] = d;
+      const c = arr[k];
+      if (c === '“' || c === '「') d++;
+      else if ((c === '”' || c === '」') && d > 0) d--;
+    }
+  }
+
+  const quoteOut = new Map(); // 引号下标 -> 目标弯引号；不在表中者保持原样
+  function maybeConvert(o, c, openCh, closeCh) {
+    if (arr[o - 1] === '=') return; // HTML/JSX 属性赋值 ="…"，保持直引号
+    if (qLeftCJK(o) || qRightCJK(c) || contentHasCJK(o, c)) {
+      quoteOut.set(o, openCh);
+      quoteOut.set(c, closeCh);
+    }
+  }
+  const followedByLatinWord = (k) => { // 词组中间的所有格：workers' rights
+    let j = k + 1;
+    while (arr[j] === ' ' || arr[j] === '\t') j++;
+    return isWestLetter(arr[j]);
+  };
+
+  // 双引号：栈式交替配对；栈空且前接数字 = 英寸记号 6"
+  {
+    const st = [];
+    for (let k = 0; k < n; k++) {
+      if (arr[k] !== '"' || codeCtx[k]) continue;
+      if (st.length) {
+        const o = st.pop();
+        const nest = qDepth[o] > 0;
+        maybeConvert(o, k, nest ? '‘' : '“', nest ? '’' : '”');
+      } else if (!isDigit(arr[k - 1])) st.push(k);
+    }
+  }
+  // 单引号：先甄别撇号/所有格/缩写，再栈式交替配对
+  {
+    const st = [];
+    for (let k = 0; k < n; k++) {
+      if (arr[k] !== "'" || codeCtx[k]) continue;
+      const prev = arr[k - 1], next = arr[k + 1];
+      if (isDigit(prev)) { if (st.length) maybeConvert(st.pop(), k, '‘', '’'); continue; }
+      if (isWestLetter(prev) && isWestLetter(next)) continue; // don't / O'Brien
+      if (isWestLetter(prev)) {
+        if (followedByLatinWord(k)) continue;                 // workers' rights
+        if (st.length) maybeConvert(st.pop(), k, '‘', '’');
+        continue;                                             // 栈空 => 落单所有格
+      }
+      // 词首缩写 'em；数字开头（'985'）则照常入栈配对，由 maybeConvert 的语境门控兜底
+      if (!isCJK(prev) && isWestLetter(next)) continue;
+      if (st.length) maybeConvert(st.pop(), k, '‘', '’'); else st.push(k);
+    }
+  }
+
+  // 逐字符输出
+  const DIRECT = { '『': '‘', '』': '’', '｡': '。', '､': '、', '･': '·' }; // 无歧义，直接映射
+  const PUNCT = { ',': '，', ';': '；', '?': '？', '!': '！' }; // 语境判定相同的四个句读
+  const out = [];
+  for (let k = 0; k < n; k++) {
+    const ch = arr[k];
+    if (codeCtx[k]) { out.push(ch); continue; } // 代码语境：原样保留
+    switch (ch) {
+      // 角引号 -> 简体弯引号（按嵌套层深定单/双；『』与半角 ｡ ､ ･ 走 DIRECT 表）
+      case '「': case '｢': out.push(qDepth[k] > 0 ? '‘' : '“'); break;
+      case '」': case '｣': out.push(qDepth[k] > 1 ? '’' : '”'); break;
+
+      case '"':
+      case "'":
+        out.push(quoteOut.has(k) ? quoteOut.get(k) : ch);
+        break;
+
+      case ',': case ';': case '?': case '!':
+        out.push(leftCJK2(k) ? PUNCT[ch] : ch);
+        break;
+      case ':': {
+        // 冒号后跟空格 = 西式“标签: 值”（端口: 8080），保持半角；
+        // 后跟括号时看该括号的最终判定：将转全角的不算颜文字（注意:(重点)）
+        const next = arr[k + 1];
+        const block = next === ' ' || next === '\t' || next === '-' ||
+          ((next === '(' || next === ')') && !parenFW[k + 1]);
+        out.push(leftCJK2(k) && !block ? '：' : ch);
+        break;
+      }
+      case '.': {
+        let run = 1;
+        while (arr[k + run] === '.') run++;
+        if (run >= 3) { // 省略号 ... -> ……（仅贴着汉字时）
+          if (leftCJK2(k) || rightCJK2(k + run - 1)) out.push('……');
+          else for (let t = 0; t < run; t++) out.push('.');
+          k += run - 1;
+        } else if (run === 2) {
+          out.push('.', '.'); k += 1; // .. 多为范围/代码，保持
+        } else {
+          const next = arr[k + 1];
+          const blockedByAlnum = next != null && /[A-Za-z0-9/@]/.test(next); // .com ./ a.b 保持
+          out.push(leftCJK2(k) && !blockedByAlnum ? '。' : ch);
+        }
+        break;
+      }
+      case '-': {
+        // 恰好两连字符、贴着中文、且两端都不是字母数字 => 破折号（他来了--带着礼物）。
+        // --help（右贴字母）、5--6（左贴数字）、--- 分隔线（3 个及以上）都不动。
+        let run = 1;
+        while (arr[k + run] === '-') run++;
+        if (run === 2 && !isAlnum(arr[k - 1]) && !isAlnum(arr[k + 2]) &&
+            (isCJK(arr[k - 1]) || isCJK(arr[k + 2]))) {
+          out.push('——'); k += 1;
+        } else {
+          for (let t = 0; t < run; t++) out.push('-');
+          k += run - 1;
+        }
+        break;
+      }
+      case '(': out.push(parenFW[k] ? '（' : ch); break;
+      case ')': out.push(parenFW[k] ? '）' : ch); break;
+      default: out.push(DIRECT[ch] || ch);
+    }
+  }
+  return out.join('');
+}
+
+// ---------- 第 4 步：盘古之白（汉字与西文交界处补空格） ----------
+// 只在“字面上的汉字”与西文串的交界补空格；全角标点旁不补（，。：等自带视觉留白）。
+// 数字前的货币符号（$100 / ¥199）、串尾的单位与符号（50% / 25℃ / m² / C++ / a[0]）随西文串归组。
+// 成对的行内标记 ** * ~ 先判开/闭：空格补在标记串【外侧】，不破坏 Markdown 加粗/斜体；
+// 词内下划线（订单_id）不视为标记，不拆分标识符；键帽 emoji（1️⃣）不算数字。
+function pangu(s) {
+  const arr = Array.from(s), n = arr.length;
+  const LEAD = new Set(['$', '€', '£', '¥']);
+  const TAIL = new Set(['%', '‰', '°', '℃', '℉', '+', '#', ')', ']',
+    '²', '³', '¹', '㎡', '㎏', '㎜', '㎝', '㎞']);
+  const isWordCh = (c) => isAlnum(c) || isHan(c);
+
+  // 标记串识别与开/闭配对（同种字符交替开合）；词内 _ 不算标记
+  const runId = new Array(n).fill(-1);
+  const runs = [];
+  {
+    const openState = {};
+    let k = 0;
+    while (k < n) {
+      const c = arr[k];
+      if (!MARKERS.has(c)) { k++; continue; }
+      let e = k;
+      while (e + 1 < n && arr[e + 1] === c) e++;
+      const wordInternal = c === '_' && isWordCh(arr[k - 1]) && isWordCh(arr[e + 1]);
+      if (!wordInternal) {
+        const open = !openState[c];
+        openState[c] = open;
+        const id = runs.length;
+        runs.push({ start: k, end: e, open });
+        for (let t = k; t <= e; t++) runId[t] = id;
+      }
+      k = e + 1;
+    }
+  }
+
+  function wordStartAt(j) { // arr[j] 是否西文串的开头
+    const c = arr[j];
+    if (c == null) return false;
+    if (isAlnum(c)) {
+      if (isDigit(c) && (arr[j + 1] === '\uFE0F' || arr[j + 1] === '\u20E3')) return false; // 键帽 emoji
+      return true;
+    }
+    return LEAD.has(c) && isDigit(arr[j + 1]);
+  }
+  function wordEndAt(k) { // arr[k] 是否西文串的结尾（可带 % ℃ ++ 等串尾符号）
+    let t = k;
+    while (t >= 0 && TAIL.has(arr[t])) t--;
+    return t >= 0 && isAlnum(arr[t]);
+  }
+  // 界两侧的内容类型：'han' | 'west' | null。闭标记归属左侧内容、开标记归属右侧内容，
+  // 因此空格总是落在标记串外侧。
+  function sideL(k) {
+    if (k < 0) return null;
+    if (runId[k] >= 0) {
+      const r = runs[runId[k]];
+      if (k !== r.end || r.open) return null;
+      return sideL(r.start - 1);
+    }
+    const c = arr[k];
+    if (isHan(c)) return 'han';
+    if (wordEndAt(k)) return 'west';
+    return null;
+  }
+  function sideR(j) {
+    if (j >= n) return null;
+    if (runId[j] >= 0) {
+      const r = runs[runId[j]];
+      if (j !== r.start || !r.open) return null;
+      return sideR(r.end + 1);
+    }
+    const c = arr[j];
+    if (isHan(c)) return 'han';
+    if (wordStartAt(j)) return 'west';
+    return null;
+  }
+  // 花括号 {…} 内部（JSON/代码）不补空格
+  const braced = braceMask(arr);
+
+  const out = [];
+  for (let k = 0; k < n; k++) {
+    out.push(arr[k]);
+    if (k + 1 >= n) break;
+    if (braced[k] || braced[k + 1]) continue;
+    const L = sideL(k), R = sideR(k + 1);
+    if (L && R && L !== R) out.push(' ');
+  }
+  return out.join('');
+}
+
+// ---------- 流水线 ----------
+// 「隔」：空格清理与标点转换交替迭代至不动点（清理让「你好 ,世界」的标点判定生效；
+// 转换出的全角标点又让第二轮清理删掉多余空格；新邻接再触发下一轮转换……）。
+function formatSegment(seg) {
+  let cur = foldWidth(seg);
+  for (let i = 0; i < 4; i++) {
+    const next = convertPunct(cleanSpaces(cur));
+    if (next === cur) break;
+    cur = next;
+  }
+  cur = cleanSpaces(cur);
+  return pangu(cur);
+}
+
+// 按保护区切分：p=true 的片段（代码块/行内代码/网址）原样保留
+function splitProtected(src) {
+  const pieces = [];
+  let cursor = 0;
+  for (const [a, b] of computeProtected(src)) {
+    if (a > cursor) pieces.push({ t: src.slice(cursor, a), p: false });
+    pieces.push({ t: src.slice(a, b), p: true });
+    cursor = b;
+  }
+  if (cursor < src.length) pieces.push({ t: src.slice(cursor), p: false });
+  return pieces;
+}
+
+// 「隔」间隔标准化：全流水线，保护区与汉字的交界也补盘古之白
+function standardize(src) {
+  let result = '';
+  for (const piece of splitProtected(src)) {
+    const txt = piece.p ? piece.t : formatSegment(piece.t);
+    if (result && txt) {
+      const lastCh = Array.from(result.slice(-2)).pop();
+      const firstCh = Array.from(txt.slice(0, 2))[0];
+      const wordy = (c) => isAlnum(c) || c === '`';
+      if ((isHan(lastCh) && wordy(firstCh)) || (wordy(lastCh) && isHan(firstCh))) result += ' ';
+    }
+    result += txt;
+  }
+  return result;
+}
+
+// 「标」中文标点规范化：只做标点转换，不碰空格、不折全角、不加盘古之白
+function punctuationOnly(src) {
+  return splitProtected(src).map((piece) => (piece.p ? piece.t : convertPunct(piece.t))).join('');
+}
+
+// ---------- 扩展定义：两个按钮，各挂一个显示开关（扩展设置里勾选，默认都显示） ----------
+const options = [
+  { identifier: 'showSpacing', label: '间隔标准化', icon: '隔', type: 'boolean', defaultValue: true },
+  { identifier: 'showPunct', label: '中文标点规范化', icon: '标', type: 'boolean', defaultValue: true },
+];
+
+const actions = [
+  {
+    icon: '隔',
+    title: '间隔标准化',
+    requirements: ['text', 'option-showSpacing=1'],
+    code(input) { popclip.pasteText(standardize(input.text)); },
+  },
+  {
+    icon: '标',
+    title: '中文标点规范化',
+    requirements: ['text', 'option-showPunct=1'],
+    code(input) { popclip.pasteText(punctuationOnly(input.text)); },
+  },
+];
+
+module.exports = { options, actions };
