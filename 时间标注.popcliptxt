@@ -1,0 +1,347 @@
+// #popclip
+// name: 时间标注
+// icon: 📅
+// language: javascript
+// module: true
+// # 一个按钮两件事：模糊时间补日期，明确日期补星期。选中什么就标什么。
+// #   这周四要去公园玩。   ->  这周四（08/06）要去公园玩。
+// #   下周一我们可以看电影 ->  下周一（08/10）我们可以看电影
+// #   截止 8月6日          ->  截止 8月6日（周四）
+// # 也可以整句、整段选中：段落里所有时间一次全部标出；已经标过的不会重标（幂等）。
+// # 周一为一周之始：「周四」「这周四」「本周四」都指本周的周四，「下周一」是下一周的周一。
+// # 模糊时间 -> 日期，认得的说法：
+// #   周X / 星期X / 礼拜X，可带 这、本、下、下下、上、上上 前缀（下个星期三、上上周日）
+// #   周末（标出周六到周日）、整周（下周 -> 08/10–08/16）
+// #   今天/明天/后天/大后天/昨天/前天/大前天（含 今日、明晚、昨儿 等写法）
+// #   N 天 / 周 / 个月 / 年 之后·之前（3天后、两个月前，中文数字也认）
+// #   这个月 / 下个月、月初 / 月中 / 月底、下个月3号
+// # 明确日期 -> 星期，认得的写法：
+// #   2026年8月6日 / 2026-08-06 / 2026.8.6 / 2026/8/6（带年份，随便哪种分隔符）
+// #   8月6日 / 8月6号（没写年份，取离今天最近的那一年；不是今年会把年份一起标出来）
+// #   8/6、6号（歧义大，只有整个选区就是它时才认，段落里不动，免得把 3/4 当成日期）
+// # 日期紧跟在时间词后面，不会吞掉后面的「下午」「八点」：明天（08/05）下午两点开会。
+// # 日期格式、是否附带星期、裸「周X」怎么算，都在 PopClip 扩展选项里调。
+
+// ---------- 小工具 ----------
+const pad = (n) => (n < 10 ? '0' + n : String(n));
+const WD = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']; // 按 getDay()
+// PopClip 的布尔选项在不同调用路径下可能是布尔或 '1'/'0' 字符串，统一判真
+const on = (v) => v === true || v === 1 || v === '1' || v === 'true';
+
+// 只取年月日，避免时分秒参与比较
+const ymd = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+const lastDay = (y, m) => new Date(y, m + 1, 0).getDate(); // m 为 0-based
+function addMonths(d, n) {
+  const y = d.getFullYear(), m = d.getMonth() + n;
+  const t = new Date(y, m, 1); // 溢出会自动进位到下一年
+  return new Date(t.getFullYear(), t.getMonth(), Math.min(d.getDate(), lastDay(t.getFullYear(), t.getMonth())));
+}
+const mondayOf = (d) => addDays(d, -((d.getDay() + 6) % 7)); // 一周从周一起算
+
+// 造一个日期，年月日不合法（2月30日、13月）返回 null
+function mkDate(y, mo, day) {
+  if (!(mo >= 1 && mo <= 12) || !(day >= 1) || day > lastDay(y, mo - 1)) return null;
+  return new Date(y, mo - 1, day);
+}
+// 没写年份的日期：在前后两年里挑离今天最近的那个。
+// 八月读到「1月5日」指的多半是明年一月，读到「12月20日」则是今年——这个直觉照做。
+// （闰日「2月29日」在 ±2 年窗口里才找得到，所以窗口开到 2 而不是 1。）
+function nearest(base, make) {
+  const t0 = ymd(base).getTime();
+  let best = null, gap = Infinity;
+  for (let k = -2; k <= 2; k++) {
+    const d = make(k);
+    if (!d) continue;
+    const g = Math.abs(d.getTime() - t0);
+    if (g < gap) { best = d; gap = g; }
+  }
+  return best;
+}
+const nearYear = (base, mo, day) => nearest(base, (k) => mkDate(base.getFullYear() + k, mo, day));
+// 光写「20号」没写月份：本月还没到就是本月，已经过了就顺到下一个有这天的月份（31号会跳过小月）
+function nextMonthDay(base, day) {
+  if (day >= base.getDate()) {
+    const cur = mkDate(base.getFullYear(), base.getMonth() + 1, day);
+    if (cur) return cur;
+  }
+  for (let k = 1; k <= 4; k++) {
+    const t = addMonths(new Date(base.getFullYear(), base.getMonth(), 1), k);
+    const d = mkDate(t.getFullYear(), t.getMonth() + 1, day);
+    if (d) return d;
+  }
+  return null;
+}
+// 猜出来的年 / 月与今天不同就一并标出，免得默默标错：8月读到「1月5日」-> （2027年 周二）
+function hint(d, base, withMonth) {
+  const y = d.getFullYear() !== base.getFullYear() ? d.getFullYear() + '年' : '';
+  const m = withMonth && (y || d.getMonth() !== base.getMonth()) ? d.getMonth() + 1 + '月' : '';
+  return y + m;
+}
+
+// 中文数字（含「两/俩」）转阿拉伯数字，够用到「一百」；解析失败返回 NaN
+const CN_DIGIT = { 〇: 0, 零: 0, 一: 1, 二: 2, 两: 2, 俩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+function toNum(s) {
+  s = s.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+  if (/^\d+$/.test(s)) return parseInt(s, 10);
+  let sum = 0, cur = 0, seen = false;
+  for (const ch of s) {
+    if (ch === '十') { sum += (cur || 1) * 10; cur = 0; seen = true; }
+    else if (ch === '百') { sum += (cur || 1) * 100; cur = 0; seen = true; }
+    else if (CN_DIGIT[ch] !== undefined) { cur = CN_DIGIT[ch]; seen = true; }
+    else return NaN;
+  }
+  return seen ? sum + cur : NaN;
+}
+
+// ---------- 词表 ----------
+const WEEK_OFF = { 这: 0, 這: 0, 本: 0, 下: 1, 下下: 2, 上: -1, 上上: -2 };
+const DAY_IDX = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 7, 天: 7, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7 };
+const REL_DAY = {
+  大前天: -3, 前天: -2,
+  昨天: -1, 昨日: -1, 昨晚: -1, 昨夜: -1, 昨儿: -1, 昨兒: -1,
+  今天: 0, 今日: 0, 今晚: 0, 今早: 0, 今晨: 0, 今夜: 0, 今儿: 0, 今兒: 0,
+  明天: 1, 明日: 1, 明晚: 1, 明早: 1, 明晨: 1, 明儿: 1, 明兒: 1,
+  后天: 2, 後天: 2, 大后天: 3, 大後天: 3,
+};
+
+// ---------- 正则片段 ----------
+const PRE = '(上上|上|这|這|本|下下|下)';            // 必须有前缀
+const PREOPT = '(?:(上上|上|这|這|本|下下|下)(?:个|個)?)?'; // 前缀可省（「个」只跟在前缀后）
+const WK = '(?:周|週|星期|礼拜|禮拜)';
+// 前面贴着数量词的不算日期：「第三周一定」「两周年」「三个月中」（q: true 的规则才查）
+const QTY = /[0-9０-９〇零一二两俩三四五六七八九十百第每几幾半个個]/;
+// 日期后面已经写了星期的（8月6日（周四）、8月6日 周四），连同星期一起吃掉，不再重标
+const WD_TAIL = '(?<wd>\\s*[（(]?\\s*(?:周|週|星期|礼拜|禮拜)[一二三四五六日天]\\s*[）)]?)?';
+const NOT_IN_NUM = '(?<![\\d/.\\-])'; // 别从一长串数字中间切一段出来当日期
+
+// ---------- 规则 ----------
+// 每条规则：sticky 正则 + resolve(m, base, opts) -> {t:'day'|'span'|'month', ...}
+// 顺序即优先级：同一起点上，先列的先匹配（长词优先，避免「下周四」被当成「下周」）。
+// 日期一律插在时间词本身后面，不吞后面的「下午」「八点」，免得把「下午三点」拆开。
+const RULES = [
+  // ===== 明确日期 -> 星期 =====
+  // 2026年8月6日 / 2026-08-06 / 2026.8.6 / 2026/8/6
+  {
+    re: NOT_IN_NUM + '(\\d{4})\\s*(?:年|[-/.])\\s*(\\d{1,2})\\s*(?:月|[-/.])\\s*(\\d{1,2})(?!\\d)(?:\\s*(?:日|号|號))?' + WD_TAIL,
+    resolve(m) {
+      const d = mkDate(+m[1], +m[2], +m[3]);
+      return !d || m.groups.wd ? null : { t: 'weekday', d, tip: '' };
+    },
+  },
+  // 8月6日 / 8月6号（没写年份，取离今天最近的那一年）
+  {
+    re: NOT_IN_NUM + '(\\d{1,2})\\s*月\\s*(\\d{1,2})(?!\\d)\\s*(?:日|号|號)' + WD_TAIL,
+    resolve(m, base) {
+      const d = nearYear(base, +m[1], +m[2]);
+      return !d || m.groups.wd ? null : { t: 'weekday', d, tip: hint(d, base, false) };
+    },
+  },
+  // ===== 模糊时间 -> 日期 =====
+  // N 天 / 周 / 个月 / 年 之后·之前
+  {
+    re: '(\\d{1,3}|[〇零一二两俩三四五六七八九十百]{1,4})\\s*(?:个|個)?\\s*(天|日|周|週|星期|礼拜|禮拜|月|年)\\s*(?:之|以)?(后|後|前)',
+    resolve(m, base) {
+      const n = toNum(m[1]);
+      if (!isFinite(n) || n === 0) return null;
+      const sign = m[3] === '前' ? -1 : 1;
+      const unit = m[2];
+      if (unit === '天' || unit === '日') return { t: 'day', d: addDays(base, sign * n) };
+      if (unit === '月') return { t: 'day', d: addMonths(base, sign * n) };
+      if (unit === '年') return { t: 'day', d: addMonths(base, sign * n * 12) };
+      return { t: 'day', d: addDays(base, sign * n * 7) }; // 周 / 星期 / 礼拜
+    },
+  },
+  // 下个月3号 / 上个月20日
+  {
+    re: PRE + '(?:个|個)?月(\\d{1,2}|[一二两三四五六七八九十]{1,3})(?:号|號|日)',
+    resolve(m, base) {
+      const n = toNum(m[2]);
+      const t = addMonths(new Date(base.getFullYear(), base.getMonth(), 1), WEEK_OFF[m[1]]);
+      if (!isFinite(n) || n < 1 || n > lastDay(t.getFullYear(), t.getMonth())) return null;
+      return { t: 'day', d: new Date(t.getFullYear(), t.getMonth(), n) };
+    },
+  },
+  // 下个月初 / 这个月底
+  { re: PRE + '(?:个|個)?月(初|中旬|中|底|末)', resolve: (m, base) => monthPart(base, WEEK_OFF[m[1]], m[2]) },
+  // 周四 / 下星期三 / 上上周日
+  {
+    q: true,
+    re: PREOPT + WK + '([一二三四五六日天1-7])',
+    resolve(m, base, opts) {
+      const idx = DAY_IDX[m[2]];
+      const monday = mondayOf(base);
+      if (m[1] !== undefined) return { t: 'day', d: addDays(monday, WEEK_OFF[m[1]] * 7 + idx - 1) };
+      const hit = addDays(monday, idx - 1); // 裸「周X」默认按本周算
+      if (opts.bareWeekday === 'next' && hit < ymd(base)) return { t: 'day', d: addDays(hit, 7) };
+      return { t: 'day', d: hit };
+    },
+  },
+  // 周末 / 下周末 -> 周六到周日
+  {
+    q: true,
+    re: PREOPT + WK + '末',
+    resolve(m, base) {
+      const monday = addDays(mondayOf(base), (WEEK_OFF[m[1]] || 0) * 7);
+      return { t: 'span', a: addDays(monday, 5), b: addDays(monday, 6) };
+    },
+  },
+  // 整周：下周 / 上个星期 -> 周一到周日（「周期」「周边」「两周年」这些排除掉）
+  {
+    q: true,
+    re: PRE + '(?:个|個)?' + WK + '(?![期边邊围圍遭全到转轉岁歲年刊])',
+    resolve(m, base) {
+      const monday = addDays(mondayOf(base), WEEK_OFF[m[1]] * 7);
+      return { t: 'span', a: monday, b: addDays(monday, 6) };
+    },
+  },
+  // 今天 / 明天 / 大后天（「以后天气」「后天因素」这些排除掉）
+  {
+    re: '(?<![以之然往此后後前])(大前天|大后天(?![性因])|大後天(?![性因])|前天|后天(?![性因])|後天(?![性因])|' +
+        '昨天|昨日|昨晚|昨夜|昨儿|昨兒|今天|今日|今晚|今早|今晨|今夜|今儿|今兒|明天|明日|明晚|明早|明晨|明儿|明兒)',
+    resolve: (m, base) => ({ t: 'day', d: addDays(base, REL_DAY[m[1]]) }),
+  },
+  // 裸「月初 / 月底」= 本月
+  { q: true, re: '月(初|中旬|中|底|末)', resolve: (m, base) => monthPart(base, 0, m[1]) },
+  // 这个月 / 下个月 / 上月份 -> 只标到月
+  { re: PRE + '(?:个|個)?月(?:份)?', resolve: (m, base) => ({ t: 'month', d: addMonths(new Date(base.getFullYear(), base.getMonth(), 1), WEEK_OFF[m[1]]) }) },
+].map((r) => ({ re: new RegExp(r.re, 'y'), resolve: r.resolve, q: r.q }));
+
+// 月初 -> 1 号，月中 / 月中旬 -> 15 号，月底 / 月末 -> 当月最后一天
+function monthPart(base, off, part) {
+  const t = addMonths(new Date(base.getFullYear(), base.getMonth(), 1), off);
+  const y = t.getFullYear(), m = t.getMonth();
+  const day = part === '初' ? 1 : part === '底' || part === '末' ? lastDay(y, m) : 15;
+  return { t: 'day', d: new Date(y, m, day) };
+}
+
+// ---------- 扫描 ----------
+// 从左到右逐字尝试；命中就整段跳过，因此「下周四」不会再被拆出「周四」。
+function scan(text) {
+  const hits = [];
+  let prevEnd = -1;
+  for (let i = 0; i < text.length; ) {
+    let step = 1;
+    for (const rule of RULES) {
+      rule.re.lastIndex = i;
+      const m = rule.re.exec(text);
+      if (!m || !m[0]) continue;
+      // 紧跟在上一个命中词后面的不查数量词，否则「周六周日」里的周日会被前面的「六」误伤
+      if (rule.q && i !== prevEnd && QTY.test(text.charAt(i - 1))) continue;
+      hits.push({ start: i, end: i + m[0].length, m, resolve: rule.resolve });
+      step = m[0].length;
+      prevEnd = i + step;
+      break;
+    }
+    i += step;
+  }
+  return hits;
+}
+
+// ---------- 输出 ----------
+// 跨年才带年份，免得平时啰嗦；YYYY-MM-DD 一律带年
+function fmtDay(d, base, style) {
+  const y = d.getFullYear(), m = d.getMonth() + 1, day = d.getDate();
+  if (style === 'iso') return y + '-' + pad(m) + '-' + pad(day);
+  const cross = y !== base.getFullYear();
+  if (style === 'cn') return (cross ? y + '年' : '') + m + '月' + day + '日';
+  return (cross ? y + '/' : '') + pad(m) + '/' + pad(day);
+}
+function fmtMonth(d, base, style) {
+  const y = d.getFullYear(), m = d.getMonth() + 1;
+  if (style === 'iso') return y + '-' + pad(m);
+  const cross = y !== base.getFullYear();
+  if (style === 'cn') return (cross ? y + '年' : '') + m + '月';
+  return (cross ? y + '年' : '') + pad(m) + '月';
+}
+function label(res, phrase, base, opts) {
+  const style = opts.format || 'slash';
+  if (res.t === 'weekday') return (res.tip ? res.tip + ' ' : '') + WD[res.d.getDay()];
+  if (res.t === 'month') return fmtMonth(res.d, base, style);
+  if (res.t === 'span') return fmtDay(res.a, base, style) + '–' + fmtDay(res.b, base, style);
+  let s = fmtDay(res.d, base, style);
+  // 「附带星期」只对没自报星期的说法加，免得出现「周四（08/06 周四）」
+  if (on(opts.weekday) && !/[周週]|星期|礼拜|禮拜/.test(phrase)) s += ' ' + WD[res.d.getDay()];
+  return s;
+}
+
+// 已经标过的（（08/06）、（2026-08-06）、（8月6日）、（08月）、（周四）…）跳过，保证重复运行不变
+const MARKED = /^[（(](?:(?:\d{4}[年\-/])?\d{1,2}(?:\s*[-/月]\s*\d{1,2}|\s*月\s*[）)])|(?:\d{4}年)?(?:\d{1,2}月)?\s*(?:周|週|星期|礼拜|禮拜)[一二三四五六日天])/;
+// 整块批注的范围：里面可能有「周三」这种字样，不能再当成待标的词
+const MARK_SPAN = /[（(](?:(?:\d{4}[年\-/])?\d{1,2}(?:\s*[-/月]\s*\d{1,2}|\s*月)|(?:\d{4}年)?(?:\d{1,2}月)?\s*(?:周|週|星期|礼拜|禮拜)[一二三四五六日天])[^）)]*[）)]/g;
+// 「8/6」「6号」这类歧义写法只在「整个选区就是它」时才当日期，段落里不认（3/4 是分数）
+const BARE = [
+  { re: /^(\s*)(\d{1,2})\s*[-/.]\s*(\d{1,2})\s*$/, pick: (m, base) => nearYear(base, +m[2], +m[3]), month: false },
+  { re: /^(\s*)(\d{1,2})\s*(?:日|号|號)\s*$/, pick: (m, base) => nextMonthDay(base, +m[2]), month: true },
+];
+function wholeDate(src, base) {
+  for (const b of BARE) {
+    const m = b.re.exec(src);
+    if (!m) continue;
+    const d = b.pick(m, base);
+    if (!d) continue;
+    // 批注插在日期后面、选区尾部空白之前
+    return { end: src.replace(/\s+$/, '').length, res: { t: 'weekday', d, tip: hint(d, base, b.month) } };
+  }
+  return null;
+}
+function markedSpans(s) {
+  const spans = [];
+  let m;
+  MARK_SPAN.lastIndex = 0;
+  while ((m = MARK_SPAN.exec(s))) spans.push([m.index, m.index + m[0].length]);
+  return spans;
+}
+
+// 主流程：命中就在词后面插入「（日期）」；一处都没命中返回 null
+function annotate(src, base, opts) {
+  const whole = wholeDate(src, base);
+  if (whole) return src.slice(0, whole.end) + '（' + label(whole.res, '', base, opts) + '）' + src.slice(whole.end);
+  const spans = markedSpans(src);
+  let out = '', cursor = 0, n = 0;
+  for (const h of scan(src)) {
+    const res = h.resolve(h.m, base, opts);
+    if (!res || MARKED.test(src.slice(h.end))) continue;
+    if (spans.some(([a, b]) => h.start >= a && h.start < b)) continue;
+    out += src.slice(cursor, h.end) + '（' + label(res, h.m[0], base, opts) + '）';
+    cursor = h.end;
+    n++;
+  }
+  return n ? out + src.slice(cursor) : null;
+}
+
+// ---------- 扩展定义 ----------
+const options = [
+  {
+    identifier: 'format', label: '日期格式', type: 'multiple',
+    values: ['slash', 'cn', 'iso'], valueLabels: ['08/06', '8月6日', '2026-08-06'],
+    defaultValue: 'slash',
+  },
+  {
+    identifier: 'weekday', label: '附带星期', type: 'boolean', defaultValue: false,
+    description: '开启后「明天」标成（08/05 周三）；本身就是「周X」的说法不重复标。',
+  },
+  {
+    identifier: 'bareWeekday', label: '不带前缀的「周X」', type: 'multiple',
+    values: ['this', 'next'], valueLabels: ['算本周（周一为一周之始）', '算将来最近的那天'],
+    defaultValue: 'this',
+  },
+];
+
+// 选区里没有像时间的词就不显示按钮（这里放宽一点，真假由 annotate 再判一次）
+const TRIGGER = /(?:周|週|星期|礼拜|禮拜)[一二三四五六日天末1-7]|(?:上上|上|这|這|本|下下|下)(?:个|個)?(?:周|週|星期|礼拜|禮拜|月)|大?[前后後]天|今[天日晚早晨夜儿兒]|明[天日晚早晨儿兒]|昨[天日晚夜儿兒]|月[初中底末]|[0-9０-９〇零一二两俩三四五六七八九十百]+\s*(?:个|個)?[天日周週月年]\s*(?:之|以)?[前后後]|\d{1,2}\s*月\s*\d{1,2}\s*[日号號]|\d{4}\s*[-/.年]\s*\d{1,2}\s*[-/.月]\s*\d{1,2}|^\s*\d{1,2}\s*[-/.]\s*\d{1,2}\s*$|^\s*\d{1,2}\s*[日号號]\s*$/;
+
+const actions = [
+  {
+    icon: '📅',
+    title: '时间标注',
+    regex: TRIGGER,
+    code(input, options) {
+      const result = annotate(input.text, new Date(), options || {});
+      if (result === null) popclip.showFailure();
+      else popclip.pasteText(result);
+    },
+  },
+];
+
+module.exports = { options, actions };
