@@ -18,7 +18,8 @@
 // # 明确日期 -> 星期，认得的写法：
 // #   2026年8月6日 / 2026-08-06 / 2026.8.6 / 2026/8/6（带年份，随便哪种分隔符）
 // #   8月6日 / 8月6号（没写年份，取离今天最近的那一年；不是今年会把年份一起标出来）
-// #   8/6、6号（歧义大，只有整个选区就是它时才认，段落里不动，免得把 3/4 当成日期）
+// #   8/6、6号（歧义大，只在「选区里除了它只剩标点空白」时才认，段落里不动，免得把 3/4 当成日期）
+// # 全角写法（８月１１日、8／11、２０２６－０８－１１）与半角一视同仁。
 // # 日期紧跟在时间词后面，不会吞掉后面的「下午」「八点」：明天（08/05）下午两点开会。
 // # 日期格式、是否附带星期、裸「周X」怎么算，都在 PopClip 扩展选项里调。
 
@@ -79,10 +80,13 @@ function hint(d, base, withMonth) {
   return y + m;
 }
 
+// 中文输入法下敲出来的全角数字折回半角：８ -> 8
+const half = (s) => s.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+
 // 中文数字（含「两/俩」）转阿拉伯数字，够用到「一百」；解析失败返回 NaN
 const CN_DIGIT = { 〇: 0, 零: 0, 一: 1, 二: 2, 两: 2, 俩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
 function toNum(s) {
-  s = s.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+  s = half(s);
   if (/^\d+$/.test(s)) return parseInt(s, 10);
   let sum = 0, cur = 0, seen = false;
   for (const ch of s) {
@@ -109,11 +113,13 @@ const REL_DAY = {
 const PRE = '(上上|上|这|這|本|下下|下)';            // 必须有前缀
 const PREOPT = '(?:(上上|上|这|這|本|下下|下)(?:个|個)?)?'; // 前缀可省（「个」只跟在前缀后）
 const WK = '(?:周|週|星期|礼拜|禮拜)';
+const D = '[0-9０-９]';        // 数字，半角全角都认（中文输入法常敲出全角）
+const SEP = '[-/.－／．]';     // 日期分隔符，同上
 // 前面贴着数量词的不算日期：「第三周一定」「两周年」「三个月中」（q: true 的规则才查）
 const QTY = /[0-9０-９〇零一二两俩三四五六七八九十百第每几幾半个個]/;
 // 日期后面已经写了星期的（8月6日（周四）、8月6日 周四），连同星期一起吃掉，不再重标
 const WD_TAIL = '(?<wd>\\s*[（(]?\\s*(?:周|週|星期|礼拜|禮拜)[一二三四五六日天]\\s*[）)]?)?';
-const NOT_IN_NUM = '(?<![\\d/.\\-])'; // 别从一长串数字中间切一段出来当日期
+const NOT_IN_NUM = '(?<![0-9０-９/.\\-－／．])'; // 别从一长串数字中间切一段出来当日期
 
 // ---------- 规则 ----------
 // 每条规则：sticky 正则 + resolve(m, base, opts) -> {t:'day'|'span'|'month', ...}
@@ -123,24 +129,24 @@ const RULES = [
   // ===== 明确日期 -> 星期 =====
   // 2026年8月6日 / 2026-08-06 / 2026.8.6 / 2026/8/6
   {
-    re: NOT_IN_NUM + '(\\d{4})\\s*(?:年|[-/.])\\s*(\\d{1,2})\\s*(?:月|[-/.])\\s*(\\d{1,2})(?!\\d)(?:\\s*(?:日|号|號))?' + WD_TAIL,
+    re: NOT_IN_NUM + '(' + D + '{4})\\s*(?:年|' + SEP + ')\\s*(' + D + '{1,2})\\s*(?:月|' + SEP + ')\\s*(' + D + '{1,2})(?!' + D + ')(?:\\s*(?:日|号|號))?' + WD_TAIL,
     resolve(m) {
-      const d = mkDate(+m[1], +m[2], +m[3]);
+      const d = mkDate(toNum(m[1]), toNum(m[2]), toNum(m[3]));
       return !d || m.groups.wd ? null : { t: 'weekday', d, tip: '' };
     },
   },
   // 8月6日 / 8月6号（没写年份，取离今天最近的那一年）
   {
-    re: NOT_IN_NUM + '(\\d{1,2})\\s*月\\s*(\\d{1,2})(?!\\d)\\s*(?:日|号|號)' + WD_TAIL,
+    re: NOT_IN_NUM + '(' + D + '{1,2})\\s*月\\s*(' + D + '{1,2})(?!' + D + ')\\s*(?:日|号|號)' + WD_TAIL,
     resolve(m, base) {
-      const d = nearYear(base, +m[1], +m[2]);
+      const d = nearYear(base, toNum(m[1]), toNum(m[2]));
       return !d || m.groups.wd ? null : { t: 'weekday', d, tip: hint(d, base, false) };
     },
   },
   // ===== 模糊时间 -> 日期 =====
   // N 天 / 周 / 个月 / 年 之后·之前
   {
-    re: '(\\d{1,3}|[〇零一二两俩三四五六七八九十百]{1,4})\\s*(?:个|個)?\\s*(天|日|周|週|星期|礼拜|禮拜|月|年)\\s*(?:之|以)?(后|後|前)',
+    re: '(' + D + '{1,3}|[〇零一二两俩三四五六七八九十百]{1,4})\\s*(?:个|個)?\\s*(天|日|周|週|星期|礼拜|禮拜|月|年)\\s*(?:之|以)?(后|後|前)',
     resolve(m, base) {
       const n = toNum(m[1]);
       if (!isFinite(n) || n === 0) return null;
@@ -154,7 +160,7 @@ const RULES = [
   },
   // 下个月3号 / 上个月20日
   {
-    re: PRE + '(?:个|個)?月(\\d{1,2}|[一二两三四五六七八九十]{1,3})(?:号|號|日)',
+    re: PRE + '(?:个|個)?月(' + D + '{1,2}|[一二两三四五六七八九十]{1,3})(?:号|號|日)',
     resolve(m, base) {
       const n = toNum(m[2]);
       const t = addMonths(new Date(base.getFullYear(), base.getMonth(), 1), WEEK_OFF[m[1]]);
@@ -167,9 +173,9 @@ const RULES = [
   // 周四 / 下星期三 / 上上周日
   {
     q: true,
-    re: PREOPT + WK + '([一二三四五六日天1-7])',
+    re: PREOPT + WK + '([一二三四五六日天1-7１-７])',
     resolve(m, base, opts) {
-      const idx = DAY_IDX[m[2]];
+      const idx = DAY_IDX[half(m[2])];
       const monday = mondayOf(base);
       if (m[1] !== undefined) return { t: 'day', d: addDays(monday, WEEK_OFF[m[1]] * 7 + idx - 1) };
       const hit = addDays(monday, idx - 1); // 裸「周X」默认按本周算
@@ -269,19 +275,27 @@ function label(res, phrase, base, opts) {
 const MARKED = /^[（(](?:(?:\d{4}[年\-/])?\d{1,2}(?:\s*[-/月]\s*\d{1,2}|\s*月\s*[）)])|(?:\d{4}年)?(?:\d{1,2}月)?\s*(?:周|週|星期|礼拜|禮拜)[一二三四五六日天])/;
 // 整块批注的范围：里面可能有「周三」这种字样，不能再当成待标的词
 const MARK_SPAN = /[（(](?:(?:\d{4}[年\-/])?\d{1,2}(?:\s*[-/月]\s*\d{1,2}|\s*月)|(?:\d{4}年)?(?:\d{1,2}月)?\s*(?:周|週|星期|礼拜|禮拜)[一二三四五六日天])[^）)]*[）)]/g;
-// 「8/6」「6号」这类歧义写法只在「整个选区就是它」时才当日期，段落里不认（3/4 是分数）
+// 「8/6」「6号」这类歧义写法只在「选区里除了它只剩标点和空白」时才当日期
+// （段落里的 3/4 是分数、3号 可能是编号，一律不认；选中时顺手带上的句号、括号则无所谓）
+// 「除了它只剩标点空白」= 前后都不出现数字、字母、汉字
+const WRAP = '[^0-9０-９A-Za-zＡ-Ｚａ-ｚ\\u3400-\\u9fff]*';
 const BARE = [
-  { re: /^(\s*)(\d{1,2})\s*[-/.]\s*(\d{1,2})\s*$/, pick: (m, base) => nearYear(base, +m[2], +m[3]), month: false },
-  { re: /^(\s*)(\d{1,2})\s*(?:日|号|號)\s*$/, pick: (m, base) => nextMonthDay(base, +m[2]), month: true },
+  { re: new RegExp('^(?<pre>' + WRAP + ')(?<body>(?<a>' + D + '{1,2})\\s*' + SEP + '\\s*(?<b>' + D + '{1,2}))(?<post>' + WRAP + ')$'),
+    pick: (g, base) => nearYear(base, toNum(g.a), toNum(g.b)), month: false },
+  { re: new RegExp('^(?<pre>' + WRAP + ')(?<body>(?<b>' + D + '{1,2})\\s*(?:日|号|號))(?<post>' + WRAP + ')$'),
+    pick: (g, base) => nextMonthDay(base, toNum(g.b)), month: true },
 ];
 function wholeDate(src, base) {
-  for (const b of BARE) {
-    const m = b.re.exec(src);
+  for (const bare of BARE) {
+    const m = bare.re.exec(src);
     if (!m) continue;
-    const d = b.pick(m, base);
+    const d = bare.pick(m.groups, base);
     if (!d) continue;
-    // 批注插在日期后面、选区尾部空白之前
-    return { end: src.replace(/\s+$/, '').length, res: { t: 'weekday', d, tip: hint(d, base, b.month) } };
+    // 批注插在日期正后面，选区尾部顺带选上的标点、空白留在外面
+    return {
+      end: m.groups.pre.length + m.groups.body.length,
+      res: { t: 'weekday', d, tip: hint(d, base, bare.month) },
+    };
   }
   return null;
 }
@@ -329,7 +343,16 @@ const options = [
 ];
 
 // 选区里没有像时间的词就不显示按钮（这里放宽一点，真假由 annotate 再判一次）
-const TRIGGER = /(?:周|週|星期|礼拜|禮拜)[一二三四五六日天末1-7]|(?:上上|上|这|這|本|下下|下)(?:个|個)?(?:周|週|星期|礼拜|禮拜|月)|大?[前后後]天|今[天日晚早晨夜儿兒]|明[天日晚早晨儿兒]|昨[天日晚夜儿兒]|月[初中底末]|[0-9０-９〇零一二两俩三四五六七八九十百]+\s*(?:个|個)?[天日周週月年]\s*(?:之|以)?[前后後]|\d{1,2}\s*月\s*\d{1,2}\s*[日号號]|\d{4}\s*[-/.年]\s*\d{1,2}\s*[-/.月]\s*\d{1,2}|^\s*\d{1,2}\s*[-/.]\s*\d{1,2}\s*$|^\s*\d{1,2}\s*[日号號]\s*$/;
+const TRIGGER = new RegExp(
+  '(?:周|週|星期|礼拜|禮拜)[一二三四五六日天末1-7１-７]' +
+  '|(?:上上|上|这|這|本|下下|下)(?:个|個)?(?:周|週|星期|礼拜|禮拜|月)' +
+  '|大?[前后後]天|今[天日晚早晨夜儿兒]|明[天日晚早晨儿兒]|昨[天日晚夜儿兒]|月[初中底末]' +
+  '|[0-9０-９〇零一二两俩三四五六七八九十百]+\\s*(?:个|個)?[天日周週月年]\\s*(?:之|以)?[前后後]' +
+  '|' + D + '{1,2}\\s*月\\s*' + D + '{1,2}\\s*[日号號]' +
+  '|' + D + '{4}\\s*(?:年|' + SEP + ')\\s*' + D + '{1,2}\\s*(?:月|' + SEP + ')\\s*' + D + '{1,2}' +
+  '|^' + WRAP + D + '{1,2}\\s*' + SEP + '\\s*' + D + '{1,2}' + WRAP + '$' +
+  '|^' + WRAP + D + '{1,2}\\s*[日号號]' + WRAP + '$'
+);
 
 const actions = [
   {
