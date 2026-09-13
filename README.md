@@ -1,7 +1,7 @@
 # PopClip 扩展
 
-[![PopClip](https://img.shields.io/badge/PopClip-extensions-blue)](https://www.popclip.app/)
-[![MotrixNext](https://img.shields.io/badge/MotrixNext-downloads-blue)](https://motrix-next.pages.dev/)
+<a href="https://www.popclip.app/"><img src="assets/icons/popclip.png" width="20" height="20" alt="PopClip 图标"> <img src="https://img.shields.io/badge/PopClip-extensions-blue" alt="PopClip"></a>
+<a href="https://motrix-next.pages.dev/"><img src="assets/icons/motrix-next.png" width="20" height="20" alt="MotrixNext 图标"> <img src="https://img.shields.io/badge/MotrixNext-downloads-blue" alt="MotrixNext"></a>
 ![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?logo=javascript&logoColor=black)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
@@ -9,10 +9,10 @@
 
 | 扩展 | 按钮 | 做什么 |
 |---|---|---|
-| **中文排版** | 隔 | 中文标点规范化，处理汉字与英文、数字之间的间隔 |
-| **中文排版** | 标 | 中文标点规范化，不处理间隔 |
-| **时间标注** | 📅 | 模糊时间补日期，明确日期补星期 |
-| **MotrixNext 下载** | ⏬ | 把下载链接发给 MotrixNext，弹出「新建任务」面板确认 |
+| **[中文排版](extensions/中文排版.popcliptxt)** | 隔 | 中文标点规范化，处理汉字与英文、数字之间的间隔 |
+| **[中文排版](extensions/中文排版.popcliptxt)** | 标 | 中文标点规范化，不处理间隔 |
+| **[时间标注](extensions/时间标注.popcliptxt)** | 📅 | 模糊时间补日期，明确日期补星期 |
+| **[MotrixNext 下载](extensions/MotrixNext下载.popcliptxt)** | ⏬ | 把下载链接发给 MotrixNext，弹出「新建任务」面板确认 |
 
 「隔」「标」是「中文排版」扩展里的两个按钮，可在 PopClip 设置里分别开关（默认都打开），共用同一套标点转换引擎，不会破坏数字、网址、代码、时间、路径等内容。
 
