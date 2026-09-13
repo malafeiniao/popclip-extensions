@@ -1,7 +1,7 @@
 # PopClip 扩展
 
-<a href="https://www.popclip.app/"><img src="assets/icons/popclip.png" width="20" height="20" alt="PopClip 图标"> <img src="https://img.shields.io/badge/PopClip-extensions-blue" alt="PopClip"></a>
-<a href="https://motrix-next.pages.dev/"><img src="assets/icons/motrix-next.png" width="20" height="20" alt="MotrixNext 图标"> <img src="https://img.shields.io/badge/MotrixNext-downloads-blue" alt="MotrixNext"></a>
+<a href="https://www.popclip.app/"><img src="assets/icons/popclip.png" width="20" height="20" alt="PopClip 图标"></a> <a href="https://www.popclip.app/"><img src="https://img.shields.io/badge/PopClip-extensions-blue" alt="PopClip"></a>
+<a href="https://motrix-next.pages.dev/"><img src="assets/icons/motrix-next.png" width="20" height="20" alt="MotrixNext 图标"></a> <a href="https://motrix-next.pages.dev/"><img src="https://img.shields.io/badge/MotrixNext-downloads-blue" alt="MotrixNext"></a>
 ![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?logo=javascript&logoColor=black)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
