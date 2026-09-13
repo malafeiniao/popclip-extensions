@@ -1,12 +1,12 @@
 #!/usr/bin/env osascript -l JavaScript
 // 时间标注 —— 回归测试。在仓库根目录运行：
-//   osascript -l JavaScript run-tests-date.js
+//   osascript -l JavaScript tests/run-tests-date.js
 // 用 macOS 自带 JXA（JavaScriptCore，与 PopClip 同引擎系）执行，无需安装 Node。
 // 「今天」被固定成 2026-08-04（周二），扩展里的 new Date() 由下面的 FakeDate 顶替，
 // 因此用例的期望值是死数字；每条用例还会额外做幂等性检查（再跑一遍不应再变）。
 ObjC.import('Foundation');
 const CWD = ObjC.unwrap($.NSFileManager.defaultManager.currentDirectoryPath);
-const EXT = CWD + '/时间标注.popcliptxt';
+const EXT = CWD + '/extensions/时间标注.popcliptxt';
 function readFile(path) {
   return ObjC.unwrap($.NSString.stringWithContentsOfFileEncodingError(path, $.NSUTF8StringEncoding, null));
 }

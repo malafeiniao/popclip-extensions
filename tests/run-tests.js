@@ -1,12 +1,12 @@
 #!/usr/bin/env osascript -l JavaScript
 // 中文排版 —— 回归测试。在仓库根目录运行：
-//   osascript -l JavaScript run-tests.js
+//   osascript -l JavaScript tests/run-tests.js
 // 用 macOS 自带 JXA（JavaScriptCore，与 PopClip 同引擎系）执行，无需安装 Node。
 // 覆盖「隔」（间隔标准化，全流水线）与「标」（中文标点规范化，只动标点）两种模式；
 // 每条用例还会额外做幂等性检查（跑两遍结果应相同）。
 ObjC.import('Foundation');
 const CWD = ObjC.unwrap($.NSFileManager.defaultManager.currentDirectoryPath);
-const EXT = CWD + '/中文排版.popcliptxt';
+const EXT = CWD + '/extensions/中文排版.popcliptxt';
 function readFile(path) {
   return ObjC.unwrap($.NSString.stringWithContentsOfFileEncodingError(path, $.NSUTF8StringEncoding, null));
 }

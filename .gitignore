@@ -1,1 +1,9 @@
 .DS_Store
+
+# 仅本地保留的参考资料与工具配置
+/references/
+/.claude/
+
+# 防止官方参考包再次放回根目录时被误提交
+/Downie-*.popclipextz
+/Traditional-Simplified-*.popclipextz
