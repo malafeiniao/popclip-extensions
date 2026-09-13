@@ -1,20 +1,20 @@
-# PopClip 扩展
+# PopClip 插件
 
 <a href="https://www.popclip.app/"><img src="assets/icons/popclip.png" width="20" height="20" alt="PopClip 图标"></a> <a href="https://www.popclip.app/"><img src="https://img.shields.io/badge/PopClip-extensions-blue" alt="PopClip"></a>
 <a href="https://motrix-next.pages.dev/"><img src="assets/icons/motrix-next.png" width="20" height="20" alt="MotrixNext 图标"></a> <a href="https://motrix-next.pages.dev/"><img src="https://img.shields.io/badge/MotrixNext-downloads-blue" alt="MotrixNext"></a>
 ![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?logo=javascript&logoColor=black)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
-三个 [PopClip](https://www.popclip.app/) 扩展：中文排版整理、日期标注，以及使用 [MotrixNext](https://motrix-next.pages.dev/) 下载。
+三个 [PopClip](https://www.popclip.app/) 插件：中文排版整理、日期标注，以及使用 [MotrixNext](https://motrix-next.pages.dev/) 下载。
 
-| 扩展 | 按钮 | 做什么 |
+| 插件 | 按钮 | 做什么 |
 |---|---|---|
 | **[中文排版](extensions/中文排版.popcliptxt)** | 隔 | 中文标点规范化，处理汉字与英文、数字之间的间隔 |
 | **[中文排版](extensions/中文排版.popcliptxt)** | 标 | 中文标点规范化，不处理间隔 |
 | **[时间标注](extensions/时间标注.popcliptxt)** | 📅 | 模糊时间补日期，明确日期补星期 |
 | **[MotrixNext 下载](extensions/MotrixNext下载.popcliptxt)** | ⏬ | 把下载链接发给 MotrixNext，弹出「新建任务」面板确认 |
 
-「隔」「标」是「中文排版」扩展里的两个按钮，可在 PopClip 设置里分别开关（默认都打开），共用同一套标点转换引擎，不会破坏数字、网址、代码、时间、路径等内容。
+「隔」「标」是「中文排版」插件里的两个按钮，可在 PopClip 设置里分别开关（默认都打开），共用同一套标点转换引擎，不会破坏数字、网址、代码、时间、路径等内容。
 
 ## 一、中文排版
 
@@ -120,7 +120,7 @@ Markdown 行内标记 `**粗体**`、`_斜体_`、`~删除~` 会原样保留。
 
 ## 三、MotrixNext 下载
 
-选中含链接的文本，点 ⏬ 把链接交给 [MotrixNext](https://motrix-next.pages.dev/)——它会弹出「新建任务」面板供确认，**不会静默开始下载**。需已安装 MotrixNext（安装扩展时会自动检查，未装会提示并给出下载链接）。
+选中含链接的文本，点 ⏬ 把链接交给 [MotrixNext](https://motrix-next.pages.dev/)——它会弹出「新建任务」面板供确认，**不会静默开始下载**。需已安装 MotrixNext（安装插件时会自动检查，未装会提示并给出下载链接）。
 
 - 支持 `http(s)` / `ftp` / `magnet` / `ed2k` / `thunder` 链接，以及 `www.` 开头的裸域名（自动补 `https://`）；
 - 按钮只在选区里检测到链接时出现；一次选中多条会全部发送（自动去重）；
@@ -129,9 +129,9 @@ Markdown 行内标记 `**粗体**`、`_斜体_`、`~删除~` 会原样保留。
 
 ## 四、安装
 
-先安装并运行 PopClip，再按需选择扩展：
+先安装并运行 PopClip，再按需选择插件：
 
-| 扩展 | 安装文件 | 额外要求 |
+| 插件 | 安装文件 | 额外要求 |
 |---|---|---|
 | 中文排版 | [中文排版.popcliptxt](extensions/中文排版.popcliptxt) | — |
 | 时间标注 | [时间标注.popcliptxt](extensions/时间标注.popcliptxt) | — |
@@ -139,9 +139,9 @@ Markdown 行内标记 `**粗体**`、`_斜体_`、`~删除~` 会原样保留。
 
 1. 从 GitHub 下载 `.popcliptxt` 时，在文件页面选择 **Download raw file** 保存原文件。
 2. 在 Finder 里**双击**下载的 `.popcliptxt` 文件，按 PopClip 提示确认安装，详见 [PopClip 安装说明](https://www.popclip.app/guide/extensions#installing-a-downloadable-extension)。
-3. 选中文本或链接，点击对应按钮。文本处理扩展会替换选区；下载扩展会把链接交给对应应用。
-4. 在 PopClip 中打开对应动作的设置，可以调整扩展选项。「中文排版」可分别开关「隔」「标」（默认都打开）。
+3. 选中文本或链接，点击对应按钮。文本处理插件会替换选区；下载插件会把链接交给对应应用。
+4. 在 PopClip 中打开对应动作的设置，可以调整插件选项。「中文排版」可分别开关「隔」「标」（默认都打开）。
 
 ## 五、关于
 
-「中文排版」「时间标注」「MotrixNext 下载」是与 Claude 协作编写的扩展，使用仓库中的 [MIT License](LICENSE)。
+「中文排版」「时间标注」「MotrixNext 下载」是与 Claude 协作编写的插件，使用仓库中的 [MIT License](LICENSE)。
